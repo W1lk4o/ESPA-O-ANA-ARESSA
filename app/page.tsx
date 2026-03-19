@@ -279,8 +279,8 @@ export default function Page() {
     const phone = onlyDigits(item.client.phone);
     if (!phone) return "#";
     const text = (settingsForm.whatsapp_message_template || defaultSettings.whatsapp_message_template)
-      .replaceAll("{nome}", item.client.name)
-      .replaceAll("{procedimento}", item.lastProcedure || "atendimento");
+      .split("{nome}").join(item.client.name)
+      .split("{procedimento}").join(item.lastProcedure || "atendimento");
     return `https://wa.me/55${phone}?text=${encodeURIComponent(text)}`;
   }
 
