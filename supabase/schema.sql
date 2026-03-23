@@ -64,6 +64,15 @@ create table if not exists public.appointment_supplies (
   total_cost numeric(12,2) not null default 0
 );
 
+create table if not exists public.bookings (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references public.clients(id) on delete restrict,
+  scheduled_for timestamptz not null,
+  status text not null default 'agendada',
+  notes text,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists public.settings (
   id uuid primary key,
   salon_name text not null default 'ESPAÇO ANA ARESSA',
@@ -89,6 +98,7 @@ alter table public.procedure_supplies enable row level security;
 alter table public.appointments enable row level security;
 alter table public.appointment_procedures enable row level security;
 alter table public.appointment_supplies enable row level security;
+alter table public.bookings enable row level security;
 alter table public.settings enable row level security;
 
 drop policy if exists "all clients" on public.clients;
@@ -105,5 +115,7 @@ drop policy if exists "all appointment procedures" on public.appointment_procedu
 create policy "all appointment procedures" on public.appointment_procedures for all using (true) with check (true);
 drop policy if exists "all appointment supplies" on public.appointment_supplies;
 create policy "all appointment supplies" on public.appointment_supplies for all using (true) with check (true);
+drop policy if exists "all bookings" on public.bookings;
+create policy "all bookings" on public.bookings for all using (true) with check (true);
 drop policy if exists "all settings" on public.settings;
 create policy "all settings" on public.settings for all using (true) with check (true);
