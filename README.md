@@ -1,48 +1,18 @@
 # ESPAÇO ANA ARESSA
 
-Projeto simples, rápido e funcional para:
-- cadastrar clientes
-- cadastrar insumos e calcular custo por unidade
-- cadastrar procedimentos
-- lançar atendimentos
-- calcular bruto, gastos e líquido
-- alertar insumos acabando
-- mostrar clientes sumidas com botão do WhatsApp
-- instalar no iPhone pela tela inicial
+Versão conservadora com:
+- login administrativo simples no app
+- agenda com data e hora
+- editar e excluir clientes, insumos, procedimentos, agendamentos e atendimentos
+- ajuste de estoque ao editar ou excluir atendimento
 
-## Instalação
-```bash
-npm install
-```
+## Importante
 
-## Banco no Supabase
-1. Crie um projeto no Supabase.
-2. Abra o SQL Editor.
-3. Cole o arquivo `supabase/schema.sql`.
-4. Execute.
+Se o seu banco já existia antes, rode novamente o arquivo `supabase/schema.sql` no Supabase para criar a tabela `bookings`.
 
-## Ambiente
-Crie `.env.local`:
+## Login
 
-```env
-NEXT_PUBLIC_SUPABASE_URL=https://SEU-PROJETO.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=SUA_CHAVE_PUBLICA
-```
+Email: `anaressa07@gmail.com`
+Senha: `98616191ANA`
 
-## Rodar local
-```bash
-npm run dev
-```
-
-## Subir no GitHub e Vercel
-- suba o repositório no GitHub
-- importe na Vercel
-- adicione as duas variáveis de ambiente
-- publique
-
-## iPhone
-Abra no Safari e use **Adicionar à Tela de Início**.
-
-## Aviso importante
-As policies do Supabase estão abertas para acelerar esta primeira versão.
-Depois, o ideal é colocar login e fechar o acesso.
+Esse login é uma trava simples no front-end. Para segurança forte de verdade, o próximo passo é trocar por Supabase Auth.

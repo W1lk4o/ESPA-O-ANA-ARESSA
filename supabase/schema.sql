@@ -107,3 +107,18 @@ drop policy if exists "all appointment supplies" on public.appointment_supplies;
 create policy "all appointment supplies" on public.appointment_supplies for all using (true) with check (true);
 drop policy if exists "all settings" on public.settings;
 create policy "all settings" on public.settings for all using (true) with check (true);
+
+
+create table if not exists public.bookings (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references public.clients(id) on delete restrict,
+  scheduled_at timestamptz not null,
+  service_summary text,
+  notes text,
+  status text not null default 'agendado',
+  created_at timestamptz not null default now()
+);
+
+alter table public.bookings enable row level security;
+drop policy if exists "all bookings" on public.bookings;
+create policy "all bookings" on public.bookings for all using (true) with check (true);

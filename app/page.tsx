@@ -9,11 +9,37 @@ type Procedure = { id: string; name: string; price: number; description: string 
 type ProcedureSupply = { id: string; procedure_id: string; supply_id: string; quantity_used: number };
 type Appointment = { id: string; client_id: string; attended_at: string; payment_method: string | null; discount: number; gross_amount: number; cost_amount: number; net_amount: number; notes: string | null; created_at: string };
 type AppointmentProcedure = { id: string; appointment_id: string; procedure_id: string; price_charged: number };
+type AppointmentSupply = { id: string; appointment_id: string; supply_id: string; quantity_used: number; unit_cost: number; total_cost: number };
+type Booking = { id: string; client_id: string; scheduled_at: string; service_summary: string | null; notes: string | null; status: string; created_at: string };
 type Settings = { id: string; salon_name: string; inactive_days_threshold: number; whatsapp_message_template: string };
-type Tab = "dashboard"|"atendimentos"|"clientes"|"procedimentos"|"insumos"|"configuracoes";
+type Tab = "dashboard"|"agenda"|"atendimentos"|"clientes"|"procedimentos"|"insumos"|"configuracoes";
+
+type AppointmentFormState = {
+  id: string;
+  client_id: string;
+  attended_at: string;
+  payment_method: string;
+  discount: string;
+  notes: string;
+  procedures: { procedure_id: string }[];
+  extra_supplies: { supply_id: string; quantity_used: string }[];
+};
+
+type BookingFormState = {
+  id: string;
+  client_id: string;
+  scheduled_at: string;
+  service_summary: string;
+  notes: string;
+  status: string;
+};
+
+const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "anaressa07@gmail.com";
+const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || "98616191ANA";
 
 const tabs: {key: Tab; label: string}[] = [
   { key: "dashboard", label: "Dashboard" },
+  { key: "agenda", label: "Agenda" },
   { key: "atendimentos", label: "Atendimentos" },
   { key: "clientes", label: "Clientes" },
   { key: "procedimentos", label: "Procedimentos" },
@@ -40,6 +66,33 @@ function dateTime(v: string) {
 function onlyDigits(v?: string | null) {
   return (v || "").replace(/\D/g, "");
 }
+function inputDateTimeValue(v?: string | null) {
+  const d = v ? new Date(v) : new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function emptyAppointmentForm(): AppointmentFormState {
+  return {
+    id: "",
+    client_id: "",
+    attended_at: inputDateTimeValue(),
+    payment_method: "pix",
+    discount: "0",
+    notes: "",
+    procedures: [{ procedure_id: "" }],
+    extra_supplies: [{ supply_id: "", quantity_used: "" }]
+  };
+}
+function emptyBookingForm(): BookingFormState {
+  return {
+    id: "",
+    client_id: "",
+    scheduled_at: inputDateTimeValue(),
+    service_summary: "",
+    notes: "",
+    status: "agendado"
+  };
+}
 
 export default function Page() {
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -48,42 +101,66 @@ export default function Page() {
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
 
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
+
   const [clients, setClients] = useState<Client[]>([]);
   const [supplies, setSupplies] = useState<Supply[]>([]);
   const [procedures, setProcedures] = useState<Procedure[]>([]);
   const [procedureSupplies, setProcedureSupplies] = useState<ProcedureSupply[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [appointmentProcedures, setAppointmentProcedures] = useState<AppointmentProcedure[]>([]);
+  const [appointmentSupplies, setAppointmentSupplies] = useState<AppointmentSupply[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
 
   const [clientForm, setClientForm] = useState({ id: "", name: "", phone: "", notes: "" });
   const [supplyForm, setSupplyForm] = useState({ id: "", name: "", purchase_price: "", quantity_in_package: "", unit_label: "un", stock_quantity: "", low_stock_threshold: "5" });
   const [procedureForm, setProcedureForm] = useState({ id: "", name: "", price: "", description: "", supplies: [{ supply_id: "", quantity_used: "" }] });
   const [settingsForm, setSettingsForm] = useState(defaultSettings);
-  const [appointmentForm, setAppointmentForm] = useState({ client_id: "", attended_at: new Date().toISOString().slice(0,16), payment_method: "pix", discount: "0", notes: "", procedures: [{ procedure_id: "" }], extra_supplies: [{ supply_id: "", quantity_used: "" }] });
+  const [appointmentForm, setAppointmentForm] = useState<AppointmentFormState>(emptyAppointmentForm());
+  const [bookingForm, setBookingForm] = useState<BookingFormState>(emptyBookingForm());
 
-  useEffect(() => { void loadAll(); }, []);
+  useEffect(() => {
+    const saved = typeof window !== "undefined" ? window.localStorage.getItem("espaco-ana-aressa-admin") : null;
+    if (saved === "ok") {
+      setIsLoggedIn(true);
+      void loadAll();
+    } else {
+      setLoading(false);
+    }
+  }, []);
 
   async function loadAll() {
     setLoading(true); setError("");
     try {
       const supabase = getSupabase();
-      const [a,b,c,d,e,f,g] = await Promise.all([
+      const [a,b,c,d,e,f,g,h,i] = await Promise.all([
         supabase.from("clients").select("*").order("name"),
         supabase.from("supplies").select("*").order("name"),
         supabase.from("procedures").select("*").order("name"),
         supabase.from("procedure_supplies").select("*"),
         supabase.from("appointments").select("*").order("attended_at", {ascending:false}),
         supabase.from("appointment_procedures").select("*"),
+        supabase.from("appointment_supplies").select("*"),
+        supabase.from("bookings").select("*").order("scheduled_at"),
         supabase.from("settings").select("*").limit(1).maybeSingle()
       ]);
-      const err = a.error || b.error || c.error || d.error || e.error || f.error || g.error;
+      const err = a.error || b.error || c.error || d.error || e.error || f.error || g.error || h.error || i.error;
       if (err) throw err;
-      setClients(a.data || []); setSupplies(b.data || []); setProcedures(c.data || []); setProcedureSupplies(d.data || []); setAppointments(e.data || []); setAppointmentProcedures(f.data || []); setSettings(g.data || null);
+      setClients(a.data || []);
+      setSupplies(b.data || []);
+      setProcedures(c.data || []);
+      setProcedureSupplies(d.data || []);
+      setAppointments(e.data || []);
+      setAppointmentProcedures(f.data || []);
+      setAppointmentSupplies(g.data || []);
+      setBookings(h.data || []);
+      setSettings(i.data || null);
       setSettingsForm({
-        salon_name: g.data?.salon_name || defaultSettings.salon_name,
-        inactive_days_threshold: g.data?.inactive_days_threshold || defaultSettings.inactive_days_threshold,
-        whatsapp_message_template: g.data?.whatsapp_message_template || defaultSettings.whatsapp_message_template
+        salon_name: i.data?.salon_name || defaultSettings.salon_name,
+        inactive_days_threshold: i.data?.inactive_days_threshold || defaultSettings.inactive_days_threshold,
+        whatsapp_message_template: i.data?.whatsapp_message_template || defaultSettings.whatsapp_message_template
       });
     } catch (e: any) {
       setError(e?.message || "Erro ao carregar");
@@ -148,45 +225,142 @@ export default function Page() {
   }, [appointments]);
   const chartMax = Math.max(1, ...chartRows.flatMap(r => [r.gross, r.net]));
 
-  function clearFlags(){ setError(""); setOk(""); }
+  const upcomingBookings = useMemo(() => {
+    const now = Date.now();
+    return bookings
+      .filter(b => b.status === "agendado" && +new Date(b.scheduled_at) >= now)
+      .sort((a,b) => +new Date(a.scheduled_at) - +new Date(b.scheduled_at));
+  }, [bookings]);
 
+  function clearFlags(){ setError(""); setOk(""); }
   function resetClientForm(){ setClientForm({ id: "", name: "", phone: "", notes: "" }); }
   function resetSupplyForm(){ setSupplyForm({ id: "", name: "", purchase_price: "", quantity_in_package: "", unit_label: "un", stock_quantity: "", low_stock_threshold: "5" }); }
   function resetProcedureForm(){ setProcedureForm({ id: "", name: "", price: "", description: "", supplies: [{ supply_id: "", quantity_used: "" }] }); }
+  function resetAppointmentForm(){ setAppointmentForm(emptyAppointmentForm()); }
+  function resetBookingForm(){ setBookingForm(emptyBookingForm()); }
 
   function editClient(item: Client) {
     clearFlags();
     setClientForm({ id: item.id, name: item.name || "", phone: item.phone || "", notes: item.notes || "" });
     setTab("clientes");
   }
-
   function editSupply(item: Supply) {
     clearFlags();
-    setSupplyForm({
-      id: item.id,
-      name: item.name || "",
-      purchase_price: String(item.purchase_price ?? ""),
-      quantity_in_package: String(item.quantity_in_package ?? ""),
-      unit_label: item.unit_label || "un",
-      stock_quantity: String(item.stock_quantity ?? ""),
-      low_stock_threshold: String(item.low_stock_threshold ?? "5")
-    });
+    setSupplyForm({ id: item.id, name: item.name || "", purchase_price: String(item.purchase_price ?? ""), quantity_in_package: String(item.quantity_in_package ?? ""), unit_label: item.unit_label || "un", stock_quantity: String(item.stock_quantity ?? ""), low_stock_threshold: String(item.low_stock_threshold ?? "5") });
     setTab("insumos");
   }
-
   function editProcedure(item: Procedure) {
     clearFlags();
-    const links = procedureSupplies
-      .filter(link => link.procedure_id === item.id)
-      .map(link => ({ supply_id: link.supply_id, quantity_used: String(link.quantity_used ?? "") }));
-    setProcedureForm({
-      id: item.id,
-      name: item.name || "",
-      price: String(item.price ?? ""),
-      description: item.description || "",
-      supplies: links.length ? links : [{ supply_id: "", quantity_used: "" }]
-    });
+    const links = procedureSupplies.filter(link => link.procedure_id === item.id).map(link => ({ supply_id: link.supply_id, quantity_used: String(link.quantity_used ?? "") }));
+    setProcedureForm({ id: item.id, name: item.name || "", price: String(item.price ?? ""), description: item.description || "", supplies: links.length ? links : [{ supply_id: "", quantity_used: "" }] });
     setTab("procedimentos");
+  }
+
+  function buildUsageFromForm(form: AppointmentFormState) {
+    const selectedIds = form.procedures.map(x => x.procedure_id).filter(Boolean);
+    const selectedProcedures = procedures.filter(p => selectedIds.includes(p.id));
+    const gross = selectedProcedures.reduce((s,p)=>s+Number(p.price||0),0);
+    const grouped = new Map<string, number>();
+    for (const procId of selectedIds) {
+      for (const link of procedureSupplies.filter(x => x.procedure_id === procId)) {
+        grouped.set(link.supply_id, (grouped.get(link.supply_id) || 0) + Number(link.quantity_used));
+      }
+    }
+    for (const extra of form.extra_supplies) {
+      if (extra.supply_id && Number(extra.quantity_used) > 0) {
+        grouped.set(extra.supply_id, (grouped.get(extra.supply_id) || 0) + Number(extra.quantity_used));
+      }
+    }
+    const usage = Array.from(grouped.entries()).map(([supply_id, quantity_used]) => {
+      const supply = supplies.find(s => s.id === supply_id);
+      return {
+        supply_id,
+        quantity_used,
+        unit_cost: Number(supply?.cost_per_unit || 0),
+        total_cost: Number(supply?.cost_per_unit || 0) * quantity_used,
+        stock: Number(supply?.stock_quantity || 0),
+        name: supply?.name || "Insumo"
+      };
+    });
+    const discount = Number(form.discount || 0);
+    const cost = usage.reduce((s,u)=>s+u.total_cost,0);
+    const net = gross - discount - cost;
+    return { selectedProcedures, usage, gross, discount, cost, net };
+  }
+
+  function editAppointment(item: Appointment) {
+    clearFlags();
+    const procRows = appointmentProcedures.filter(row => row.appointment_id === item.id);
+    const supplyRows = appointmentSupplies.filter(row => row.appointment_id === item.id);
+    const standard = new Map<string, number>();
+    for (const row of procRows) {
+      for (const link of procedureSupplies.filter(link => link.procedure_id === row.procedure_id)) {
+        standard.set(link.supply_id, (standard.get(link.supply_id) || 0) + Number(link.quantity_used || 0));
+      }
+    }
+    const extras = supplyRows
+      .map(row => ({
+        supply_id: row.supply_id,
+        quantity_used: Math.max(0, Number(row.quantity_used || 0) - Number(standard.get(row.supply_id) || 0))
+      }))
+      .filter(row => row.quantity_used > 0)
+      .map(row => ({ supply_id: row.supply_id, quantity_used: String(row.quantity_used) }));
+
+    setAppointmentForm({
+      id: item.id,
+      client_id: item.client_id,
+      attended_at: inputDateTimeValue(item.attended_at),
+      payment_method: item.payment_method || "pix",
+      discount: String(item.discount ?? 0),
+      notes: item.notes || "",
+      procedures: procRows.length ? procRows.map(row => ({ procedure_id: row.procedure_id })) : [{ procedure_id: "" }],
+      extra_supplies: extras.length ? extras : [{ supply_id: "", quantity_used: "" }]
+    });
+    setTab("atendimentos");
+  }
+
+  function editBooking(item: Booking) {
+    clearFlags();
+    setBookingForm({ id: item.id, client_id: item.client_id, scheduled_at: inputDateTimeValue(item.scheduled_at), service_summary: item.service_summary || "", notes: item.notes || "", status: item.status || "agendado" });
+    setTab("agenda");
+  }
+
+  function fillFromBooking(item: Booking) {
+    clearFlags();
+    setAppointmentForm({
+      id: "",
+      client_id: item.client_id,
+      attended_at: inputDateTimeValue(item.scheduled_at),
+      payment_method: "pix",
+      discount: "0",
+      notes: [item.service_summary, item.notes].filter(Boolean).join(" | "),
+      procedures: [{ procedure_id: "" }],
+      extra_supplies: [{ supply_id: "", quantity_used: "" }]
+    });
+    setTab("atendimentos");
+  }
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    clearFlags();
+    const email = loginForm.email.trim().toLowerCase();
+    const password = loginForm.password.trim();
+    if (email !== ADMIN_EMAIL.toLowerCase() || password !== ADMIN_PASSWORD) {
+      setError("Email ou senha inválidos.");
+      return;
+    }
+    if (typeof window !== "undefined") window.localStorage.setItem("espaco-ana-aressa-admin", "ok");
+    setIsLoggedIn(true);
+    await loadAll();
+    setOk("Login realizado.");
+  }
+
+  function logout() {
+    if (typeof window !== "undefined") window.localStorage.removeItem("espaco-ana-aressa-admin");
+    setIsLoggedIn(false);
+    setLoginForm({ email: "", password: "" });
+    setOk("");
+    setError("");
   }
 
   async function saveClient(e: React.FormEvent){
@@ -196,9 +370,7 @@ export default function Page() {
       setBusy(true);
       const supabase = getSupabase();
       const payload = { name: clientForm.name.trim(), phone: clientForm.phone.trim() || null, notes: clientForm.notes.trim() || null };
-      const response = clientForm.id
-        ? await supabase.from("clients").update(payload).eq("id", clientForm.id)
-        : await supabase.from("clients").insert(payload);
+      const response = clientForm.id ? await supabase.from("clients").update(payload).eq("id", clientForm.id) : await supabase.from("clients").insert(payload);
       if (response.error) throw response.error;
       resetClientForm();
       setOk(clientForm.id ? "Cliente atualizada." : "Cliente cadastrada.");
@@ -218,9 +390,7 @@ export default function Page() {
         name: supplyForm.name.trim(), purchase_price: purchase, quantity_in_package: qty, unit_label: supplyForm.unit_label || "un",
         cost_per_unit: purchase / qty, stock_quantity: Number(supplyForm.stock_quantity || 0), low_stock_threshold: Number(supplyForm.low_stock_threshold || 0)
       };
-      const response = supplyForm.id
-        ? await supabase.from("supplies").update(payload).eq("id", supplyForm.id)
-        : await supabase.from("supplies").insert(payload);
+      const response = supplyForm.id ? await supabase.from("supplies").update(payload).eq("id", supplyForm.id) : await supabase.from("supplies").insert(payload);
       if (response.error) throw response.error;
       resetSupplyForm();
       setOk(supplyForm.id ? "Insumo atualizado." : "Insumo cadastrado.");
@@ -280,41 +450,111 @@ export default function Page() {
     if (!appointmentForm.client_id) return setError("Selecione a cliente.");
     const selectedIds = appointmentForm.procedures.map(x => x.procedure_id).filter(Boolean);
     if (!selectedIds.length) return setError("Adicione pelo menos um procedimento.");
-    const selectedProcedures = procedures.filter(p => selectedIds.includes(p.id));
-    const gross = selectedProcedures.reduce((s,p)=>s+Number(p.price||0),0);
-    const grouped = new Map<string, number>();
-    for (const procId of selectedIds) {
-      for (const link of procedureSupplies.filter(x => x.procedure_id === procId)) {
-        grouped.set(link.supply_id, (grouped.get(link.supply_id) || 0) + Number(link.quantity_used));
-      }
-    }
-    for (const extra of appointmentForm.extra_supplies) {
-      if (extra.supply_id && Number(extra.quantity_used) > 0) grouped.set(extra.supply_id, (grouped.get(extra.supply_id) || 0) + Number(extra.quantity_used));
-    }
-    const usage = Array.from(grouped.entries()).map(([supply_id, quantity_used]) => {
-      const supply = supplies.find(s => s.id === supply_id);
-      return { supply_id, quantity_used, unit_cost: Number(supply?.cost_per_unit || 0), total_cost: Number(supply?.cost_per_unit || 0) * quantity_used, stock: Number(supply?.stock_quantity || 0), name: supply?.name || "Insumo" };
-    });
-    for (const item of usage) if (item.stock < item.quantity_used) return setError(`Estoque insuficiente para ${item.name}.`);
-    const cost = usage.reduce((s,u)=>s+u.total_cost,0); const discount = Number(appointmentForm.discount||0); const net = gross - discount - cost;
+    const { selectedProcedures, usage, gross, discount, cost, net } = buildUsageFromForm(appointmentForm);
+
     try {
       setBusy(true);
       const supabase = getSupabase();
-      const ap = await supabase.from("appointments").insert({ client_id: appointmentForm.client_id, attended_at: new Date(appointmentForm.attended_at).toISOString(), payment_method: appointmentForm.payment_method, discount, gross_amount: gross, cost_amount: cost, net_amount: net, notes: appointmentForm.notes || null }).select("*").single();
-      if (ap.error) throw ap.error;
-      const rowsProc = selectedProcedures.map(p => ({ appointment_id: ap.data.id, procedure_id: p.id, price_charged: p.price }));
-      const rowsSup = usage.map(u => ({ appointment_id: ap.data.id, supply_id: u.supply_id, quantity_used: u.quantity_used, unit_cost: u.unit_cost, total_cost: u.total_cost }));
+
+      if (appointmentForm.id) {
+        const oldUsage = appointmentSupplies.filter(row => row.appointment_id === appointmentForm.id);
+        for (const old of oldUsage) {
+          const current = supplies.find(s => s.id === old.supply_id);
+          const restore = await supabase.from("supplies").update({ stock_quantity: Number(current?.stock_quantity || 0) + Number(old.quantity_used || 0) }).eq("id", old.supply_id);
+          if (restore.error) throw restore.error;
+        }
+      }
+
+      const refreshedSupplies = appointmentForm.id
+        ? supplies.map(s => {
+            const restored = appointmentSupplies.filter(row => row.appointment_id === appointmentForm.id && row.supply_id === s.id).reduce((sum, row) => sum + Number(row.quantity_used || 0), 0);
+            return { ...s, stock_quantity: Number(s.stock_quantity || 0) + restored };
+          })
+        : supplies;
+
+      for (const item of usage) {
+        const current = refreshedSupplies.find(s => s.id === item.supply_id);
+        if (Number(current?.stock_quantity || 0) < item.quantity_used) return setError(`Estoque insuficiente para ${item.name}.`);
+      }
+
+      let appointmentId = appointmentForm.id;
+      if (appointmentForm.id) {
+        const upd = await supabase.from("appointments").update({ client_id: appointmentForm.client_id, attended_at: new Date(appointmentForm.attended_at).toISOString(), payment_method: appointmentForm.payment_method, discount, gross_amount: gross, cost_amount: cost, net_amount: net, notes: appointmentForm.notes || null }).eq("id", appointmentForm.id).select("id").single();
+        if (upd.error) throw upd.error;
+        appointmentId = upd.data.id;
+        const delProc = await supabase.from("appointment_procedures").delete().eq("appointment_id", appointmentId);
+        if (delProc.error) throw delProc.error;
+        const delSup = await supabase.from("appointment_supplies").delete().eq("appointment_id", appointmentId);
+        if (delSup.error) throw delSup.error;
+      } else {
+        const created = await supabase.from("appointments").insert({ client_id: appointmentForm.client_id, attended_at: new Date(appointmentForm.attended_at).toISOString(), payment_method: appointmentForm.payment_method, discount, gross_amount: gross, cost_amount: cost, net_amount: net, notes: appointmentForm.notes || null }).select("id").single();
+        if (created.error) throw created.error;
+        appointmentId = created.data.id;
+      }
+
+      const rowsProc = selectedProcedures.map(p => ({ appointment_id: appointmentId, procedure_id: p.id, price_charged: p.price }));
+      const rowsSup = usage.map(u => ({ appointment_id: appointmentId, supply_id: u.supply_id, quantity_used: u.quantity_used, unit_cost: u.unit_cost, total_cost: u.total_cost }));
       const rp = await supabase.from("appointment_procedures").insert(rowsProc); if (rp.error) throw rp.error;
       if (rowsSup.length) { const rs = await supabase.from("appointment_supplies").insert(rowsSup); if (rs.error) throw rs.error; }
       for (const u of usage) {
-        const current = supplies.find(s => s.id === u.supply_id);
+        const current = refreshedSupplies.find(s => s.id === u.supply_id);
         const update = await supabase.from("supplies").update({ stock_quantity: Number(current?.stock_quantity || 0) - u.quantity_used }).eq("id", u.supply_id);
         if (update.error) throw update.error;
       }
-      setAppointmentForm({ client_id: "", attended_at: new Date().toISOString().slice(0,16), payment_method: "pix", discount: "0", notes: "", procedures: [{ procedure_id: "" }], extra_supplies: [{ supply_id: "", quantity_used: "" }] });
-      setOk("Atendimento salvo.");
-      await loadAll(); setTab("dashboard");
+      resetAppointmentForm();
+      setOk(appointmentForm.id ? "Atendimento atualizado." : "Atendimento salvo.");
+      await loadAll(); setTab("atendimentos");
     } catch (e:any) { setError(e?.message || "Erro ao salvar atendimento."); } finally { setBusy(false); }
+  }
+
+  async function removeAppointment(id: string) {
+    if (!confirm("Excluir atendimento? O estoque será devolvido.")) return;
+    clearFlags();
+    try {
+      setBusy(true);
+      const supabase = getSupabase();
+      const usage = appointmentSupplies.filter(row => row.appointment_id === id);
+      for (const row of usage) {
+        const current = supplies.find(s => s.id === row.supply_id);
+        const restore = await supabase.from("supplies").update({ stock_quantity: Number(current?.stock_quantity || 0) + Number(row.quantity_used || 0) }).eq("id", row.supply_id);
+        if (restore.error) throw restore.error;
+      }
+      const { error } = await supabase.from("appointments").delete().eq("id", id);
+      if (error) throw error;
+      if (appointmentForm.id === id) resetAppointmentForm();
+      setOk("Atendimento excluído.");
+      await loadAll();
+    } catch (e:any) { setError(e?.message || "Erro ao excluir atendimento."); } finally { setBusy(false); }
+  }
+
+  async function saveBooking(e: React.FormEvent) {
+    e.preventDefault(); clearFlags();
+    if (!bookingForm.client_id) return setError("Selecione a cliente.");
+    if (!bookingForm.scheduled_at) return setError("Informe a data e hora.");
+    try {
+      setBusy(true);
+      const supabase = getSupabase();
+      const payload = { client_id: bookingForm.client_id, scheduled_at: new Date(bookingForm.scheduled_at).toISOString(), service_summary: bookingForm.service_summary.trim() || null, notes: bookingForm.notes.trim() || null, status: bookingForm.status || "agendado" };
+      const res = bookingForm.id ? await supabase.from("bookings").update(payload).eq("id", bookingForm.id) : await supabase.from("bookings").insert(payload);
+      if (res.error) throw res.error;
+      resetBookingForm();
+      setOk(bookingForm.id ? "Agendamento atualizado." : "Agendamento salvo.");
+      await loadAll(); setTab("agenda");
+    } catch (e:any) { setError(e?.message || "Erro ao salvar agendamento."); } finally { setBusy(false); }
+  }
+
+  async function removeBooking(id: string) {
+    if (!confirm("Excluir agendamento?")) return;
+    clearFlags();
+    try {
+      setBusy(true);
+      const supabase = getSupabase();
+      const { error } = await supabase.from("bookings").delete().eq("id", id);
+      if (error) throw error;
+      if (bookingForm.id === id) resetBookingForm();
+      setOk("Agendamento excluído.");
+      await loadAll();
+    } catch (e:any) { setError(e?.message || "Erro ao excluir agendamento."); } finally { setBusy(false); }
   }
 
   async function removeItem(table: string, id: string, label: string) {
@@ -325,6 +565,9 @@ export default function Page() {
       const supabase = getSupabase();
       const { error } = await supabase.from(table).delete().eq("id", id);
       if (error) throw error;
+      if (table === "clients" && clientForm.id === id) resetClientForm();
+      if (table === "supplies" && supplyForm.id === id) resetSupplyForm();
+      if (table === "procedures" && procedureForm.id === id) resetProcedureForm();
       setOk(`${label} excluído.`);
       await loadAll();
     } catch (e:any) { setError(e?.message || `Erro ao excluir ${label}.`); } finally { setBusy(false); }
@@ -337,6 +580,24 @@ export default function Page() {
       .split("{nome}").join(item.client.name)
       .split("{procedimento}").join(item.lastProcedure || "atendimento");
     return `https://wa.me/55${phone}?text=${encodeURIComponent(text)}`;
+  }
+
+  if (!isLoggedIn && !loading) {
+    return (
+      <main className="shell auth-shell">
+        <section className="hero auth-card">
+          <h1>ESPAÇO ANA ARESSA</h1>
+          <p>Entre com o login de administradora para abrir o sistema.</p>
+          {error ? <div className="notice err" style={{marginTop:12}}>{error}</div> : null}
+          <form onSubmit={handleLogin} className="grid" style={{marginTop:14}}>
+            <div className="field"><label>Email</label><input type="email" value={loginForm.email} onChange={e => setLoginForm(v => ({...v, email:e.target.value}))} placeholder="anaressa07@gmail.com" autoComplete="username" /></div>
+            <div className="field"><label>Senha</label><input type="password" value={loginForm.password} onChange={e => setLoginForm(v => ({...v, password:e.target.value}))} placeholder="Digite a senha" autoComplete="current-password" /></div>
+            <button className="btn primary" type="submit">Entrar</button>
+          </form>
+          <div className="help" style={{marginTop:12}}>Esse login é uma trava simples dentro do app. Depois dá para trocar por autenticação forte com Supabase Auth.</div>
+        </section>
+      </main>
+    );
   }
 
   if (loading) return <main className="shell"><section className="hero"><h1>ESPAÇO ANA ARESSA</h1><p>Carregando sistema...</p></section></main>;
@@ -356,88 +617,132 @@ export default function Page() {
           <div className="row space center">
             <div>
               <h1>{settingsForm.salon_name}</h1>
-              <p>Sistema simples, rápido e funcional para controlar clientes, insumos, procedimentos e lucro real.</p>
+              <p>Sistema simples, rápido e funcional para controlar clientes, agenda, insumos, procedimentos e lucro real.</p>
             </div>
-            <div className="badge">{appointments.length} atendimentos lançados</div>
+            <div className="row center">
+              <span className="badge ok">{upcomingBookings.length} agendamentos futuros</span>
+              <button className="btn ghost" type="button" onClick={logout}>Sair</button>
+            </div>
           </div>
-          <div className="grid stats">
-            <div className="card"><div className="label">Bruto no mês</div><div className="big">{brl(grossMonth)}</div><div className="help">{monthApps.length} atendimentos</div></div>
-            <div className="card"><div className="label">Gastos no mês</div><div className="big">{brl(costMonth)}</div><div className="help">Custo dos materiais</div></div>
-            <div className="card"><div className="label">Líquido no mês</div><div className="big">{brl(netMonth)}</div><div className="help">Bruto - desconto - insumos</div></div>
-            <div className="card"><div className="label">Alertas de estoque</div><div className="big">{lowStock.length}</div><div className="help">Itens no limite</div></div>
-          </div>
-          {error ? <div className="notice err">{error}</div> : null}
-          {ok ? <div className="notice ok">{ok}</div> : null}
         </section>
 
-        {tab === "dashboard" && <div className="grid">
-          <section className="card">
-            <div className="row space center"><h2 style={{margin:0}}>Alerta de insumos acabando</h2>{lowStock.length ? <span className="badge danger">{lowStock.length} itens</span> : <span className="badge ok">Tudo em ordem</span>}</div>
-            <div className="list" style={{marginTop:12}}>
-              {!lowStock.length ? <div className="empty">Nenhum item abaixo do limite configurado.</div> : lowStock.map(item => <div className="item" key={item.id}><div className="row space center"><div><div className="item-title">{item.name}</div><div className="item-sub">Estoque atual: {item.stock_quantity} {item.unit_label} • Avisar ao chegar em {item.low_stock_threshold} {item.unit_label}</div></div><span className="badge danger">Repor</span></div></div>)}
+        {error ? <div className="notice err">{error}</div> : null}
+        {ok ? <div className="notice ok">{ok}</div> : null}
+
+        {tab === "dashboard" && <>
+          <section className="grid stats">
+            <div className="card"><div className="label">Faturamento do mês</div><div className="big">{brl(grossMonth)}</div></div>
+            <div className="card"><div className="label">Gastos com insumos</div><div className="big">{brl(costMonth)}</div></div>
+            <div className="card"><div className="label">Lucro líquido</div><div className="big">{brl(netMonth)}</div></div>
+            <div className="card"><div className="label">Clientes cadastradas</div><div className="big">{clients.length}</div></div>
+          </section>
+
+          <section className="grid split">
+            <div className="card">
+              <div className="row space center"><h2 style={{marginTop:0}}>Últimos 7 dias</h2><span className="badge">Bruto x Líquido</span></div>
+              <div className="chart">
+                {chartRows.map(row => <div key={row.day} className="col"><div className="bars"><div className="bar gross" style={{height: `${(row.gross/chartMax)*100}%`}} /><div className="bar net" style={{height: `${(row.net/chartMax)*100}%`}} /></div><div className="chart-label">{row.day}</div></div>)}
+              </div>
+            </div>
+
+            <div className="grid">
+              <div className="card">
+                <div className="row space center"><h2 style={{marginTop:0}}>Insumos acabando</h2><span className={`badge ${lowStock.length ? "danger" : "ok"}`}>{lowStock.length} alerta(s)</span></div>
+                <div className="list">
+                  {!lowStock.length ? <div className="empty">Nenhum insumo em alerta.</div> : lowStock.map(item => <div key={item.id} className="item"><div className="item-title">{item.name}</div><div className="item-sub">Estoque: {item.stock_quantity} {item.unit_label}</div><div className="item-sub">Avisar em: {item.low_stock_threshold} {item.unit_label}</div></div>)}
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="row space center"><h2 style={{marginTop:0}}>Clientes sumidas</h2><span className="badge">{dormantClients.length}</span></div>
+                <div className="list">
+                  {!dormantClients.length ? <div className="empty">Nenhuma cliente acima do prazo definido.</div> : dormantClients.slice(0,5).map(item => <div key={item.client.id} className="item"><div className="row space center"><div><div className="item-title">{item.client.name}</div><div className="item-sub">Último atendimento: {date(item.last!.attended_at)}</div><div className="item-sub">Último procedimento: {item.lastProcedure || "-"}</div></div>{item.client.phone ? <a className="btn primary" target="_blank" rel="noreferrer" href={whatsappLink(item)}>WhatsApp</a> : null}</div></div>)}
+                </div>
+              </div>
             </div>
           </section>
 
           <section className="grid split">
             <div className="card">
-              <div className="row space center"><h2 style={{margin:0}}>Últimos 7 dias</h2><span className="badge">Bruto x líquido</span></div>
-              <div className="chart">
-                {chartRows.map(r => <div className="col" key={r.day}><div className="bars"><div className="bar gross" title={`Bruto ${brl(r.gross)}`} style={{height:`${(r.gross/chartMax)*190}px`}}/><div className="bar net" title={`Líquido ${brl(r.net)}`} style={{height:`${(r.net/chartMax)*190}px`}}/></div><div className="chart-label">{r.day}</div></div>)}
+              <div className="row space center"><h2 style={{marginTop:0}}>Próximos agendamentos</h2><button className="btn ghost" type="button" onClick={() => setTab("agenda")}>Abrir agenda</button></div>
+              <div className="list">
+                {!upcomingBookings.length ? <div className="empty">Nenhum agendamento futuro.</div> : upcomingBookings.slice(0,5).map(item => {
+                  const client = clients.find(c => c.id === item.client_id);
+                  return <div className="item" key={item.id}><div className="item-title">{client?.name || "Cliente"} — {dateTime(item.scheduled_at)}</div><div className="item-sub">{item.service_summary || "Sem procedimento informado"}</div><div className="item-sub">Status: {item.status}</div></div>;
+                })}
               </div>
             </div>
+
             <div className="card">
-              <div className="row space center"><h2 style={{margin:0}}>Clientes sumidas</h2><span className="badge">{settingsForm.inactive_days_threshold} dias</span></div>
-              <div className="list" style={{marginTop:12}}>
-                {!dormantClients.length ? <div className="empty">Nenhuma cliente acima do prazo configurado.</div> : dormantClients.slice(0,5).map(item => <div className="item" key={item.client.id}><div className="item-title">{item.client.name}</div><div className="item-sub">Último atendimento: {date(item.last?.attended_at || "")}</div><div className="item-sub">Último procedimento: {item.lastProcedure || "Não encontrado"}</div><div className="row" style={{marginTop:10}}><a className="btn primary" target="_blank" rel="noreferrer" href={whatsappLink(item)}>Chamar no WhatsApp</a></div></div>)}
+              <div className="row space center"><h2 style={{marginTop:0}}>Procedimentos com melhor margem</h2><button className="btn ghost" type="button" onClick={() => setTab("procedimentos")}>Ver tudo</button></div>
+              <div className="list">
+                {!proceduresWithCost.length ? <div className="empty">Cadastre procedimentos para ver a margem.</div> : [...proceduresWithCost].sort((a,b)=>b.margin-a.margin).slice(0,5).map(proc => <div className="item" key={proc.id}><div className="item-title">{proc.name}</div><div className="item-sub">Preço: {brl(proc.price)} • Custo: {brl(proc.estimatedCost)} • Margem: {brl(proc.margin)}</div></div>)}
               </div>
             </div>
           </section>
+        </>}
+
+        {tab === "agenda" && <div className="grid">
+          <section className="card">
+            <div className="row space center"><h2 style={{marginTop:0}}>{bookingForm.id ? "Editar agendamento" : "Novo agendamento"}</h2>{bookingForm.id ? <button className="btn ghost" type="button" onClick={resetBookingForm}>Cancelar edição</button> : null}</div>
+            <form onSubmit={saveBooking} className="grid">
+              <div className="row"><div className="field"><label>Cliente</label><select value={bookingForm.client_id} onChange={e => setBookingForm(v => ({...v, client_id:e.target.value}))}><option value="">Selecione</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div><div className="field"><label>Data e hora</label><input type="datetime-local" value={bookingForm.scheduled_at} onChange={e => setBookingForm(v => ({...v, scheduled_at:e.target.value}))} /></div></div>
+              <div className="row"><div className="field"><label>Serviço combinado</label><input value={bookingForm.service_summary} onChange={e => setBookingForm(v => ({...v, service_summary:e.target.value}))} placeholder="Ex.: sobrancelha + henna" /></div><div className="field small"><label>Status</label><select value={bookingForm.status} onChange={e => setBookingForm(v => ({...v, status:e.target.value}))}><option value="agendado">Agendado</option><option value="confirmado">Confirmado</option><option value="concluido">Concluído</option><option value="cancelado">Cancelado</option></select></div></div>
+              <div className="field"><label>Observações</label><textarea value={bookingForm.notes} onChange={e => setBookingForm(v => ({...v, notes:e.target.value}))} placeholder="Horário preferido, detalhes do serviço..." /></div>
+              <div className="row"><button className="btn primary" disabled={busy}>{busy ? "Salvando..." : bookingForm.id ? "Atualizar agendamento" : "Salvar agendamento"}</button></div>
+            </form>
+          </section>
 
           <section className="card">
-            <div className="row space center"><h2 style={{margin:0}}>Últimos atendimentos</h2><button className="btn primary" onClick={() => setTab("atendimentos")}>Novo atendimento</button></div>
-            <div className="table">
-              <table><thead><tr><th>Cliente</th><th>Data</th><th>Bruto</th><th>Gastos</th><th>Líquido</th></tr></thead><tbody>
-                {!appointments.length ? <tr><td colSpan={5}><div className="empty">Nenhum atendimento lançado ainda.</div></td></tr> : appointments.slice(0,8).map(a => { const client = clients.find(c => c.id === a.client_id); return <tr key={a.id}><td>{client?.name || "Cliente"}</td><td>{dateTime(a.attended_at)}</td><td>{brl(a.gross_amount)}</td><td>{brl(a.cost_amount)}</td><td>{brl(a.net_amount)}</td></tr>; })}
-              </tbody></table>
+            <h2 style={{marginTop:0}}>Agenda</h2>
+            <div className="list">
+              {!bookings.length ? <div className="empty">Nenhum agendamento cadastrado.</div> : bookings.map(item => {
+                const client = clients.find(c => c.id === item.client_id);
+                return <div className="item" key={item.id}><div className="row space center"><div><div className="item-title">{client?.name || "Cliente"} — {dateTime(item.scheduled_at)}</div><div className="item-sub">{item.service_summary || "Sem procedimento informado"}</div><div className="item-sub">Status: {item.status}</div>{item.notes ? <div className="item-sub">{item.notes}</div> : null}</div><div className="row"><button className="btn ghost" type="button" onClick={() => editBooking(item)}>Editar</button><button className="btn ghost" type="button" onClick={() => fillFromBooking(item)}>Virar atendimento</button><button className="btn danger" type="button" onClick={() => removeBooking(item.id)}>Excluir</button></div></div></div>;
+              })}
             </div>
           </section>
         </div>}
 
         {tab === "atendimentos" && <div className="grid">
           <section className="card">
-            <div className="row space center"><h2 style={{margin:0}}>Lançar atendimento</h2><span className="badge">Calcula lucro real</span></div>
-            <form onSubmit={saveAppointment} className="grid" style={{marginTop:12}}>
+            <div className="row space center"><h2 style={{marginTop:0}}>{appointmentForm.id ? "Editar atendimento" : "Novo atendimento"}</h2>{appointmentForm.id ? <button className="btn ghost" type="button" onClick={resetAppointmentForm}>Cancelar edição</button> : null}</div>
+            <form onSubmit={saveAppointment} className="grid">
               <div className="row">
-                <div className="field"><label>Cliente</label><select value={appointmentForm.client_id} onChange={e => setAppointmentForm(v => ({...v, client_id: e.target.value}))}><option value="">Selecione</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-                <div className="field"><label>Data e hora</label><input type="datetime-local" value={appointmentForm.attended_at} onChange={e => setAppointmentForm(v => ({...v, attended_at: e.target.value}))}/></div>
-                <div className="field"><label>Pagamento</label><select value={appointmentForm.payment_method} onChange={e => setAppointmentForm(v => ({...v, payment_method: e.target.value}))}><option value="pix">Pix</option><option value="dinheiro">Dinheiro</option><option value="cartao">Cartão</option><option value="transferencia">Transferência</option></select></div>
-                <div className="field small"><label>Desconto</label><input type="number" step="0.01" value={appointmentForm.discount} onChange={e => setAppointmentForm(v => ({...v, discount: e.target.value}))}/></div>
+                <div className="field"><label>Cliente</label><select value={appointmentForm.client_id} onChange={e => setAppointmentForm(v => ({...v, client_id:e.target.value}))}><option value="">Selecione</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                <div className="field"><label>Data e hora</label><input type="datetime-local" value={appointmentForm.attended_at} onChange={e => setAppointmentForm(v => ({...v, attended_at:e.target.value}))} /></div>
+                <div className="field small"><label>Pagamento</label><select value={appointmentForm.payment_method} onChange={e => setAppointmentForm(v => ({...v, payment_method:e.target.value}))}><option value="pix">PIX</option><option value="dinheiro">Dinheiro</option><option value="cartao">Cartão</option><option value="fiado">Fiado</option></select></div>
+                <div className="field small"><label>Desconto</label><input type="number" step="0.01" value={appointmentForm.discount} onChange={e => setAppointmentForm(v => ({...v, discount:e.target.value}))} /></div>
               </div>
 
               <div className="card" style={{padding:12}}>
                 <div className="row space center"><h3 style={{margin:0}}>Procedimentos realizados</h3><button className="btn ghost" type="button" onClick={() => setAppointmentForm(v => ({...v, procedures:[...v.procedures, {procedure_id:""}]}))}>+ Adicionar procedimento</button></div>
                 <div className="grid" style={{marginTop:10}}>
-                  {appointmentForm.procedures.map((item, index) => <div className="row center" key={index}><div className="field"><label>Procedimento {index+1}</label><select value={item.procedure_id} onChange={e => { const next=[...appointmentForm.procedures]; next[index].procedure_id=e.target.value; setAppointmentForm(v => ({...v, procedures: next})); }}><option value="">Selecione</option>{procedures.map(p => <option key={p.id} value={p.id}>{p.name} — {brl(p.price)}</option>)}</select></div><button type="button" className="btn danger" onClick={() => { const next=appointmentForm.procedures.filter((_,i)=>i!==index); setAppointmentForm(v => ({...v, procedures: next.length?next:[{procedure_id:""}]})); }}>Remover</button></div>)}
+                  {appointmentForm.procedures.map((item, index) => <div className="row center" key={index}><div className="field"><label>Procedimento</label><select value={item.procedure_id} onChange={e => { const next=[...appointmentForm.procedures]; next[index].procedure_id=e.target.value; setAppointmentForm(v => ({...v, procedures: next})); }}><option value="">Selecione</option>{procedures.map(p => <option key={p.id} value={p.id}>{p.name} — {brl(p.price)}</option>)}</select></div><button className="btn danger" type="button" onClick={() => { const next=appointmentForm.procedures.filter((_,i)=>i!==index); setAppointmentForm(v => ({...v, procedures: next.length?next:[{procedure_id:""}]})); }}>Remover</button></div>)}
                 </div>
               </div>
 
               <div className="card" style={{padding:12}}>
-                <div className="row space center"><h3 style={{margin:0}}>Insumos extras do atendimento</h3><button className="btn ghost" type="button" onClick={() => setAppointmentForm(v => ({...v, extra_supplies:[...v.extra_supplies, {supply_id:"", quantity_used:""}]}))}>+ Adicionar insumo</button></div>
+                <div className="row space center"><h3 style={{margin:0}}>Insumos extras usados</h3><button className="btn ghost" type="button" onClick={() => setAppointmentForm(v => ({...v, extra_supplies:[...v.extra_supplies, {supply_id:"", quantity_used:""}]}))}>+ Adicionar insumo</button></div>
                 <div className="grid" style={{marginTop:10}}>
-                  {appointmentForm.extra_supplies.map((item, index) => <div className="row center" key={index}><div className="field"><label>Insumo</label><select value={item.supply_id} onChange={e => { const next=[...appointmentForm.extra_supplies]; next[index].supply_id=e.target.value; setAppointmentForm(v => ({...v, extra_supplies: next})); }}><option value="">Selecione</option>{supplies.map(s => <option key={s.id} value={s.id}>{s.name} — estoque {s.stock_quantity} {s.unit_label}</option>)}</select></div><div className="field small"><label>Qtd. usada</label><input type="number" step="0.01" value={item.quantity_used} onChange={e => { const next=[...appointmentForm.extra_supplies]; next[index].quantity_used=e.target.value; setAppointmentForm(v => ({...v, extra_supplies: next})); }}/></div><button type="button" className="btn danger" onClick={() => { const next=appointmentForm.extra_supplies.filter((_,i)=>i!==index); setAppointmentForm(v => ({...v, extra_supplies: next.length?next:[{supply_id:"", quantity_used:""}]})); }}>Remover</button></div>)}
+                  {appointmentForm.extra_supplies.map((item, index) => <div className="row center" key={index}><div className="field"><label>Insumo</label><select value={item.supply_id} onChange={e => { const next=[...appointmentForm.extra_supplies]; next[index].supply_id=e.target.value; setAppointmentForm(v => ({...v, extra_supplies: next})); }}><option value="">Selecione</option>{supplies.map(s => <option key={s.id} value={s.id}>{s.name} — estoque {s.stock_quantity} {s.unit_label}</option>)}</select></div><div className="field small"><label>Qtd. usada</label><input type="number" step="0.01" value={item.quantity_used} onChange={e => { const next=[...appointmentForm.extra_supplies]; next[index].quantity_used=e.target.value; setAppointmentForm(v => ({...v, extra_supplies: next})); }}/></div><button className="btn danger" type="button" onClick={() => { const next=appointmentForm.extra_supplies.filter((_,i)=>i!==index); setAppointmentForm(v => ({...v, extra_supplies: next.length?next:[{supply_id:"", quantity_used:""}]})); }}>Remover</button></div>)}
                 </div>
               </div>
 
-              <div className="field"><label>Observações</label><textarea value={appointmentForm.notes} onChange={e => setAppointmentForm(v => ({...v, notes: e.target.value}))} placeholder="Ex.: cliente pediu retorno na próxima semana..." /></div>
-              <div className="row"><button className="btn primary" disabled={busy}>{busy ? "Salvando..." : "Salvar atendimento"}</button><button className="btn" type="button" onClick={() => setTab("dashboard")}>Voltar</button></div>
+              <div className="field"><label>Observações</label><textarea value={appointmentForm.notes} onChange={e => setAppointmentForm(v => ({...v, notes:e.target.value}))} placeholder="Ex.: retoque, observações da pele, etc." /></div>
+              <div className="row"><button className="btn primary" disabled={busy}>{busy ? "Salvando..." : appointmentForm.id ? "Atualizar atendimento" : "Salvar atendimento"}</button></div>
             </form>
           </section>
 
           <section className="card">
             <h2 style={{marginTop:0}}>Histórico de atendimentos</h2>
-            <div className="table"><table><thead><tr><th>Cliente</th><th>Data</th><th>Procedimentos</th><th>Bruto</th><th>Gastos</th><th>Líquido</th></tr></thead><tbody>
-              {!appointments.length ? <tr><td colSpan={6}><div className="empty">Nenhum atendimento encontrado.</div></td></tr> : appointments.map(a => { const client = clients.find(c => c.id === a.client_id); const names = (lastProcedureByAppointment.get(a.id) || []).join(", "); return <tr key={a.id}><td>{client?.name || "-"}</td><td>{dateTime(a.attended_at)}</td><td>{names || "-"}</td><td>{brl(a.gross_amount)}</td><td>{brl(a.cost_amount)}</td><td>{brl(a.net_amount)}</td></tr>; })}
-            </tbody></table></div>
+            <div className="list">
+              {!appointments.length ? <div className="empty">Nenhum atendimento lançado.</div> : appointments.map(item => {
+                const client = clients.find(c => c.id === item.client_id);
+                const procNames = (lastProcedureByAppointment.get(item.id) || []).join(", ");
+                return <div className="item" key={item.id}><div className="row space center"><div><div className="item-title">{client?.name || "Cliente"} — {dateTime(item.attended_at)}</div><div className="item-sub">Procedimentos: {procNames || "-"}</div><div className="item-sub">Bruto: {brl(Number(item.gross_amount || 0))} • Gastos: {brl(Number(item.cost_amount || 0))} • Líquido: {brl(Number(item.net_amount || 0))}</div>{item.notes ? <div className="item-sub">{item.notes}</div> : null}</div><div className="row"><button className="btn ghost" type="button" onClick={() => editAppointment(item)}>Editar</button><button className="btn danger" type="button" onClick={() => removeAppointment(item.id)}>Excluir</button></div></div></div>;
+              })}
+            </div>
           </section>
         </div>}
 
@@ -445,7 +750,7 @@ export default function Page() {
           <section className="card">
             <div className="row space center"><h2 style={{marginTop:0}}>{clientForm.id ? "Editar cliente" : "Cadastrar cliente"}</h2>{clientForm.id ? <button className="btn ghost" type="button" onClick={resetClientForm}>Cancelar edição</button> : null}</div>
             <form onSubmit={saveClient} className="grid">
-              <div className="row"><div className="field"><label>Nome</label><input value={clientForm.name} onChange={e => setClientForm(v => ({...v, name:e.target.value}))} placeholder="Nome da cliente" /></div><div className="field"><label>Telefone</label><input value={clientForm.phone} onChange={e => setClientForm(v => ({...v, phone:e.target.value}))} placeholder="(31) 99999-9999" /></div></div>
+              <div className="row"><div className="field"><label>Nome da cliente</label><input value={clientForm.name} onChange={e => setClientForm(v => ({...v, name:e.target.value}))} placeholder="Ex.: Maria Souza" /></div><div className="field"><label>Telefone / WhatsApp</label><input value={clientForm.phone} onChange={e => setClientForm(v => ({...v, phone:e.target.value}))} placeholder="(31) 99999-9999" /></div></div>
               <div className="field"><label>Observações</label><textarea value={clientForm.notes} onChange={e => setClientForm(v => ({...v, notes:e.target.value}))} placeholder="Ex.: alergias, preferências..." /></div>
               <div className="row"><button className="btn primary" disabled={busy}>{busy ? "Salvando..." : clientForm.id ? "Atualizar cliente" : "Salvar cliente"}</button></div>
             </form>
