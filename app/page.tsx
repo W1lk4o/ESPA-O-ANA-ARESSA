@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getSupabase } from "../lib/supabase";
 
 type Client = { id: string; name: string; phone: string | null; notes: string | null; created_at: string };
@@ -13,6 +13,8 @@ type AppointmentSupply = { id: string; appointment_id: string; supply_id: string
 type Booking = { id: string; client_id: string; scheduled_at: string; service_summary: string | null; notes: string | null; status: string; created_at: string };
 type Settings = { id: string; salon_name: string; inactive_days_threshold: number; whatsapp_message_template: string };
 type Tab = "dashboard"|"agenda"|"atendimentos"|"clientes"|"procedimentos"|"insumos"|"configuracoes";
+
+type PendingDelete = null | { kind: "simple"|"appointment"|"booking"; id: string; table?: string; label: string; message: string };
 
 type AppointmentFormState = {
   id: string;
@@ -120,6 +122,13 @@ export default function Page() {
   const [settingsForm, setSettingsForm] = useState(defaultSettings);
   const [appointmentForm, setAppointmentForm] = useState<AppointmentFormState>(emptyAppointmentForm());
   const [bookingForm, setBookingForm] = useState<BookingFormState>(emptyBookingForm());
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete>(null);
+
+  const clientsFormRef = useRef<HTMLElement | null>(null);
+  const proceduresFormRef = useRef<HTMLElement | null>(null);
+  const suppliesFormRef = useRef<HTMLElement | null>(null);
+  const appointmentsFormRef = useRef<HTMLElement | null>(null);
+  const bookingsFormRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const saved = typeof window !== "undefined" ? window.localStorage.getItem("espaco-ana-aressa-admin") : null;
@@ -233,6 +242,12 @@ export default function Page() {
   }, [bookings]);
 
   function clearFlags(){ setError(""); setOk(""); }
+
+  function scrollToForm(ref: React.RefObject<HTMLElement | null>) {
+    if (typeof window === "undefined") return;
+    window.setTimeout(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 40);
+  }
+
   function resetClientForm(){ setClientForm({ id: "", name: "", phone: "", notes: "" }); }
   function resetSupplyForm(){ setSupplyForm({ id: "", name: "", purchase_price: "", quantity_in_package: "", unit_label: "un", stock_quantity: "", low_stock_threshold: "5" }); }
   function resetProcedureForm(){ setProcedureForm({ id: "", name: "", price: "", description: "", supplies: [{ supply_id: "", quantity_used: "" }] }); }
@@ -241,19 +256,25 @@ export default function Page() {
 
   function editClient(item: Client) {
     clearFlags();
+    setPendingDelete(null);
     setClientForm({ id: item.id, name: item.name || "", phone: item.phone || "", notes: item.notes || "" });
     setTab("clientes");
+    scrollToForm(clientsFormRef);
   }
   function editSupply(item: Supply) {
     clearFlags();
+    setPendingDelete(null);
     setSupplyForm({ id: item.id, name: item.name || "", purchase_price: String(item.purchase_price ?? ""), quantity_in_package: String(item.quantity_in_package ?? ""), unit_label: item.unit_label || "un", stock_quantity: String(item.stock_quantity ?? ""), low_stock_threshold: String(item.low_stock_threshold ?? "5") });
     setTab("insumos");
+    scrollToForm(suppliesFormRef);
   }
   function editProcedure(item: Procedure) {
     clearFlags();
+    setPendingDelete(null);
     const links = procedureSupplies.filter(link => link.procedure_id === item.id).map(link => ({ supply_id: link.supply_id, quantity_used: String(link.quantity_used ?? "") }));
     setProcedureForm({ id: item.id, name: item.name || "", price: String(item.price ?? ""), description: item.description || "", supplies: links.length ? links : [{ supply_id: "", quantity_used: "" }] });
     setTab("procedimentos");
+    scrollToForm(proceduresFormRef);
   }
 
   function buildUsageFromForm(form: AppointmentFormState) {
@@ -290,6 +311,7 @@ export default function Page() {
 
   function editAppointment(item: Appointment) {
     clearFlags();
+    setPendingDelete(null);
     const procRows = appointmentProcedures.filter(row => row.appointment_id === item.id);
     const supplyRows = appointmentSupplies.filter(row => row.appointment_id === item.id);
     const standard = new Map<string, number>();
@@ -317,16 +339,20 @@ export default function Page() {
       extra_supplies: extras.length ? extras : [{ supply_id: "", quantity_used: "" }]
     });
     setTab("atendimentos");
+    scrollToForm(appointmentsFormRef);
   }
 
   function editBooking(item: Booking) {
     clearFlags();
+    setPendingDelete(null);
     setBookingForm({ id: item.id, client_id: item.client_id, scheduled_at: inputDateTimeValue(item.scheduled_at), service_summary: item.service_summary || "", notes: item.notes || "", status: item.status || "agendado" });
     setTab("agenda");
+    scrollToForm(bookingsFormRef);
   }
 
   function fillFromBooking(item: Booking) {
     clearFlags();
+    setPendingDelete(null);
     setAppointmentForm({
       id: "",
       client_id: item.client_id,
@@ -338,6 +364,7 @@ export default function Page() {
       extra_supplies: [{ supply_id: "", quantity_used: "" }]
     });
     setTab("atendimentos");
+    scrollToForm(appointmentsFormRef);
   }
 
   async function handleLogin(e: React.FormEvent) {
@@ -507,8 +534,12 @@ export default function Page() {
     } catch (e:any) { setError(e?.message || "Erro ao salvar atendimento."); } finally { setBusy(false); }
   }
 
+  function askRemoveAppointment(id: string) {
+    clearFlags();
+    setPendingDelete({ kind: "appointment", id, label: "atendimento", message: "Excluir atendimento? O estoque desse atendimento vai ser devolvido." });
+  }
+
   async function removeAppointment(id: string) {
-    if (!confirm("Excluir atendimento? O estoque será devolvido.")) return;
     clearFlags();
     try {
       setBusy(true);
@@ -543,8 +574,12 @@ export default function Page() {
     } catch (e:any) { setError(e?.message || "Erro ao salvar agendamento."); } finally { setBusy(false); }
   }
 
+  function askRemoveBooking(id: string) {
+    clearFlags();
+    setPendingDelete({ kind: "booking", id, label: "agendamento", message: "Excluir agendamento?" });
+  }
+
   async function removeBooking(id: string) {
-    if (!confirm("Excluir agendamento?")) return;
     clearFlags();
     try {
       setBusy(true);
@@ -557,8 +592,17 @@ export default function Page() {
     } catch (e:any) { setError(e?.message || "Erro ao excluir agendamento."); } finally { setBusy(false); }
   }
 
+  function askRemoveItem(table: string, id: string, label: string) {
+    clearFlags();
+    const extras: Record<string, string> = {
+      clients: " Se essa cliente tiver atendimento ou agendamento ligado, o Supabase pode bloquear a exclusão.",
+      procedures: " Se esse procedimento já foi usado em atendimento, o banco pode bloquear a exclusão.",
+      supplies: " Se esse insumo já foi usado em procedimento ou atendimento, o banco pode bloquear a exclusão."
+    };
+    setPendingDelete({ kind: "simple", id, table, label, message: `Excluir ${label}?${extras[table] || ""}` });
+  }
+
   async function removeItem(table: string, id: string, label: string) {
-    if (!confirm(`Excluir ${label}?`)) return;
     clearFlags();
     try {
       setBusy(true);
@@ -571,6 +615,15 @@ export default function Page() {
       setOk(`${label} excluído.`);
       await loadAll();
     } catch (e:any) { setError(e?.message || `Erro ao excluir ${label}.`); } finally { setBusy(false); }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    const action = pendingDelete;
+    setPendingDelete(null);
+    if (action.kind === "appointment") return removeAppointment(action.id);
+    if (action.kind === "booking") return removeBooking(action.id);
+    if (action.kind === "simple" && action.table) return removeItem(action.table, action.id, action.label);
   }
 
   function whatsappLink(item: {client: Client; lastProcedure: string}) {
@@ -628,6 +681,20 @@ export default function Page() {
 
         {error ? <div className="notice err">{error}</div> : null}
         {ok ? <div className="notice ok">{ok}</div> : null}
+        {pendingDelete ? (
+          <section className="notice warn">
+            <div className="row space center">
+              <div>
+                <div style={{fontWeight:800}}>Confirmação</div>
+                <div className="muted" style={{marginTop:4}}>{pendingDelete.message}</div>
+              </div>
+              <div className="row">
+                <button className="btn ghost" type="button" onClick={() => setPendingDelete(null)} disabled={busy}>Cancelar</button>
+                <button className="btn danger" type="button" onClick={confirmDelete} disabled={busy}>{busy ? "Excluindo..." : "Confirmar exclusão"}</button>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         {tab === "dashboard" && <>
           <section className="grid stats">
@@ -683,13 +750,13 @@ export default function Page() {
         </>}
 
         {tab === "agenda" && <div className="grid">
-          <section className="card">
+          <section className="card" ref={bookingsFormRef}>
             <div className="row space center"><h2 style={{marginTop:0}}>{bookingForm.id ? "Editar agendamento" : "Novo agendamento"}</h2>{bookingForm.id ? <button className="btn ghost" type="button" onClick={resetBookingForm}>Cancelar edição</button> : null}</div>
             <form onSubmit={saveBooking} className="grid">
               <div className="row"><div className="field"><label>Cliente</label><select value={bookingForm.client_id} onChange={e => setBookingForm(v => ({...v, client_id:e.target.value}))}><option value="">Selecione</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div><div className="field"><label>Data e hora</label><input type="datetime-local" value={bookingForm.scheduled_at} onChange={e => setBookingForm(v => ({...v, scheduled_at:e.target.value}))} /></div></div>
               <div className="row"><div className="field"><label>Serviço combinado</label><input value={bookingForm.service_summary} onChange={e => setBookingForm(v => ({...v, service_summary:e.target.value}))} placeholder="Ex.: sobrancelha + henna" /></div><div className="field small"><label>Status</label><select value={bookingForm.status} onChange={e => setBookingForm(v => ({...v, status:e.target.value}))}><option value="agendado">Agendado</option><option value="confirmado">Confirmado</option><option value="concluido">Concluído</option><option value="cancelado">Cancelado</option></select></div></div>
               <div className="field"><label>Observações</label><textarea value={bookingForm.notes} onChange={e => setBookingForm(v => ({...v, notes:e.target.value}))} placeholder="Horário preferido, detalhes do serviço..." /></div>
-              <div className="row"><button className="btn primary" disabled={busy}>{busy ? "Salvando..." : bookingForm.id ? "Atualizar agendamento" : "Salvar agendamento"}</button></div>
+              <div className="row"><button className="btn primary" type="submit" disabled={busy}>{busy ? "Salvando..." : bookingForm.id ? "Atualizar agendamento" : "Salvar agendamento"}</button></div>
             </form>
           </section>
 
@@ -698,14 +765,14 @@ export default function Page() {
             <div className="list">
               {!bookings.length ? <div className="empty">Nenhum agendamento cadastrado.</div> : bookings.map(item => {
                 const client = clients.find(c => c.id === item.client_id);
-                return <div className="item" key={item.id}><div className="row space center"><div><div className="item-title">{client?.name || "Cliente"} — {dateTime(item.scheduled_at)}</div><div className="item-sub">{item.service_summary || "Sem procedimento informado"}</div><div className="item-sub">Status: {item.status}</div>{item.notes ? <div className="item-sub">{item.notes}</div> : null}</div><div className="row"><button className="btn ghost" type="button" onClick={() => editBooking(item)}>Editar</button><button className="btn ghost" type="button" onClick={() => fillFromBooking(item)}>Virar atendimento</button><button className="btn danger" type="button" onClick={() => removeBooking(item.id)}>Excluir</button></div></div></div>;
+                return <div className="item" key={item.id}><div className="row space center"><div><div className="item-title">{client?.name || "Cliente"} — {dateTime(item.scheduled_at)}</div><div className="item-sub">{item.service_summary || "Sem procedimento informado"}</div><div className="item-sub">Status: {item.status}</div>{item.notes ? <div className="item-sub">{item.notes}</div> : null}</div><div className="row"><button className="btn ghost" type="button" onClick={() => editBooking(item)}>Editar</button><button className="btn ghost" type="button" onClick={() => fillFromBooking(item)}>Virar atendimento</button><button className="btn danger" type="button" onClick={() => askRemoveBooking(item.id)}>Excluir</button></div></div></div>;
               })}
             </div>
           </section>
         </div>}
 
         {tab === "atendimentos" && <div className="grid">
-          <section className="card">
+          <section className="card" ref={appointmentsFormRef}>
             <div className="row space center"><h2 style={{marginTop:0}}>{appointmentForm.id ? "Editar atendimento" : "Novo atendimento"}</h2>{appointmentForm.id ? <button className="btn ghost" type="button" onClick={resetAppointmentForm}>Cancelar edição</button> : null}</div>
             <form onSubmit={saveAppointment} className="grid">
               <div className="row">
@@ -730,7 +797,7 @@ export default function Page() {
               </div>
 
               <div className="field"><label>Observações</label><textarea value={appointmentForm.notes} onChange={e => setAppointmentForm(v => ({...v, notes:e.target.value}))} placeholder="Ex.: retoque, observações da pele, etc." /></div>
-              <div className="row"><button className="btn primary" disabled={busy}>{busy ? "Salvando..." : appointmentForm.id ? "Atualizar atendimento" : "Salvar atendimento"}</button></div>
+              <div className="row"><button className="btn primary" type="submit" disabled={busy}>{busy ? "Salvando..." : appointmentForm.id ? "Atualizar atendimento" : "Salvar atendimento"}</button></div>
             </form>
           </section>
 
@@ -740,32 +807,32 @@ export default function Page() {
               {!appointments.length ? <div className="empty">Nenhum atendimento lançado.</div> : appointments.map(item => {
                 const client = clients.find(c => c.id === item.client_id);
                 const procNames = (lastProcedureByAppointment.get(item.id) || []).join(", ");
-                return <div className="item" key={item.id}><div className="row space center"><div><div className="item-title">{client?.name || "Cliente"} — {dateTime(item.attended_at)}</div><div className="item-sub">Procedimentos: {procNames || "-"}</div><div className="item-sub">Bruto: {brl(Number(item.gross_amount || 0))} • Gastos: {brl(Number(item.cost_amount || 0))} • Líquido: {brl(Number(item.net_amount || 0))}</div>{item.notes ? <div className="item-sub">{item.notes}</div> : null}</div><div className="row"><button className="btn ghost" type="button" onClick={() => editAppointment(item)}>Editar</button><button className="btn danger" type="button" onClick={() => removeAppointment(item.id)}>Excluir</button></div></div></div>;
+                return <div className="item" key={item.id}><div className="row space center"><div><div className="item-title">{client?.name || "Cliente"} — {dateTime(item.attended_at)}</div><div className="item-sub">Procedimentos: {procNames || "-"}</div><div className="item-sub">Bruto: {brl(Number(item.gross_amount || 0))} • Gastos: {brl(Number(item.cost_amount || 0))} • Líquido: {brl(Number(item.net_amount || 0))}</div>{item.notes ? <div className="item-sub">{item.notes}</div> : null}</div><div className="row"><button className="btn ghost" type="button" onClick={() => editAppointment(item)}>Editar</button><button className="btn danger" type="button" onClick={() => askRemoveAppointment(item.id)}>Excluir</button></div></div></div>;
               })}
             </div>
           </section>
         </div>}
 
         {tab === "clientes" && <div className="grid">
-          <section className="card">
+          <section className="card" ref={clientsFormRef}>
             <div className="row space center"><h2 style={{marginTop:0}}>{clientForm.id ? "Editar cliente" : "Cadastrar cliente"}</h2>{clientForm.id ? <button className="btn ghost" type="button" onClick={resetClientForm}>Cancelar edição</button> : null}</div>
             <form onSubmit={saveClient} className="grid">
               <div className="row"><div className="field"><label>Nome da cliente</label><input value={clientForm.name} onChange={e => setClientForm(v => ({...v, name:e.target.value}))} placeholder="Ex.: Maria Souza" /></div><div className="field"><label>Telefone / WhatsApp</label><input value={clientForm.phone} onChange={e => setClientForm(v => ({...v, phone:e.target.value}))} placeholder="(31) 99999-9999" /></div></div>
               <div className="field"><label>Observações</label><textarea value={clientForm.notes} onChange={e => setClientForm(v => ({...v, notes:e.target.value}))} placeholder="Ex.: alergias, preferências..." /></div>
-              <div className="row"><button className="btn primary" disabled={busy}>{busy ? "Salvando..." : clientForm.id ? "Atualizar cliente" : "Salvar cliente"}</button></div>
+              <div className="row"><button className="btn primary" type="submit" disabled={busy}>{busy ? "Salvando..." : clientForm.id ? "Atualizar cliente" : "Salvar cliente"}</button></div>
             </form>
           </section>
 
           <section className="card">
             <h2 style={{marginTop:0}}>Lista de clientes</h2>
             <div className="list">
-              {!clientsSummary.length ? <div className="empty">Nenhuma cliente cadastrada.</div> : clientsSummary.map(item => <div className="item" key={item.client.id}><div className="row space center"><div><div className="item-title">{item.client.name}</div><div className="item-sub">{item.client.phone || "Sem telefone"}</div><div className="item-sub">Último atendimento: {item.last ? date(item.last.attended_at) : "Nunca"}</div><div className="item-sub">Total faturado com ela: {brl(item.totalSpent)}</div></div><div className="row"><button className="btn ghost" type="button" onClick={() => editClient(item.client)}>Editar</button>{item.last && item.client.phone ? <a className="btn primary" target="_blank" rel="noreferrer" href={whatsappLink(item)}>WhatsApp</a> : null}<button className="btn danger" type="button" onClick={() => removeItem("clients", item.client.id, "cliente")}>Excluir</button></div></div></div>)}
+              {!clientsSummary.length ? <div className="empty">Nenhuma cliente cadastrada.</div> : clientsSummary.map(item => <div className="item" key={item.client.id}><div className="row space center"><div><div className="item-title">{item.client.name}</div><div className="item-sub">{item.client.phone || "Sem telefone"}</div><div className="item-sub">Último atendimento: {item.last ? date(item.last.attended_at) : "Nunca"}</div><div className="item-sub">Total faturado com ela: {brl(item.totalSpent)}</div></div><div className="row"><button className="btn ghost" type="button" onClick={() => editClient(item.client)}>Editar</button>{item.last && item.client.phone ? <a className="btn primary" target="_blank" rel="noreferrer" href={whatsappLink(item)}>WhatsApp</a> : null}<button className="btn danger" type="button" onClick={() => askRemoveItem("clients", item.client.id, "cliente")}>Excluir</button></div></div></div>)}
             </div>
           </section>
         </div>}
 
         {tab === "procedimentos" && <div className="grid">
-          <section className="card">
+          <section className="card" ref={proceduresFormRef}>
             <div className="row space center"><h2 style={{marginTop:0}}>{procedureForm.id ? "Editar procedimento" : "Cadastrar procedimento"}</h2>{procedureForm.id ? <button className="btn ghost" type="button" onClick={resetProcedureForm}>Cancelar edição</button> : null}</div>
             <form onSubmit={saveProcedure} className="grid">
               <div className="row"><div className="field"><label>Nome do procedimento</label><input value={procedureForm.name} onChange={e => setProcedureForm(v => ({...v, name:e.target.value}))} placeholder="Ex.: Design de sobrancelha" /></div><div className="field small"><label>Valor cobrado</label><input type="number" step="0.01" value={procedureForm.price} onChange={e => setProcedureForm(v => ({...v, price:e.target.value}))} /></div></div>
@@ -776,32 +843,32 @@ export default function Page() {
                   {procedureForm.supplies.map((item, index) => <div className="row center" key={index}><div className="field"><label>Insumo</label><select value={item.supply_id} onChange={e => { const next=[...procedureForm.supplies]; next[index].supply_id=e.target.value; setProcedureForm(v => ({...v, supplies: next})); }}><option value="">Selecione</option>{supplies.map(s => <option key={s.id} value={s.id}>{s.name} — {brl(s.cost_per_unit)} por {s.unit_label}</option>)}</select></div><div className="field small"><label>Qtd. usada</label><input type="number" step="0.01" value={item.quantity_used} onChange={e => { const next=[...procedureForm.supplies]; next[index].quantity_used=e.target.value; setProcedureForm(v => ({...v, supplies: next})); }}/></div><button className="btn danger" type="button" onClick={() => { const next=procedureForm.supplies.filter((_,i)=>i!==index); setProcedureForm(v => ({...v, supplies: next.length?next:[{supply_id:"", quantity_used:""}]})); }}>Remover</button></div>)}
                 </div>
               </div>
-              <div className="row"><button className="btn primary" disabled={busy}>{busy ? "Salvando..." : procedureForm.id ? "Atualizar procedimento" : "Salvar procedimento"}</button></div>
+              <div className="row"><button className="btn primary" type="submit" disabled={busy}>{busy ? "Salvando..." : procedureForm.id ? "Atualizar procedimento" : "Salvar procedimento"}</button></div>
             </form>
           </section>
 
           <section className="card">
             <h2 style={{marginTop:0}}>Procedimentos cadastrados</h2>
             <div className="list">
-              {!proceduresWithCost.length ? <div className="empty">Nenhum procedimento cadastrado.</div> : proceduresWithCost.map(proc => <div className="item" key={proc.id}><div className="row space center"><div><div className="item-title">{proc.name} — {brl(proc.price)}</div><div className="item-sub">Custo estimado de insumos: {brl(proc.estimatedCost)}</div><div className="item-sub">Margem estimada: {brl(proc.margin)}</div>{proc.description ? <div className="item-sub">{proc.description}</div> : null}</div><div className="row"><button className="btn ghost" type="button" onClick={() => editProcedure(proc)}>Editar</button><button className="btn danger" type="button" onClick={() => removeItem("procedures", proc.id, "procedimento")}>Excluir</button></div></div></div>)}
+              {!proceduresWithCost.length ? <div className="empty">Nenhum procedimento cadastrado.</div> : proceduresWithCost.map(proc => <div className="item" key={proc.id}><div className="row space center"><div><div className="item-title">{proc.name} — {brl(proc.price)}</div><div className="item-sub">Custo estimado de insumos: {brl(proc.estimatedCost)}</div><div className="item-sub">Margem estimada: {brl(proc.margin)}</div>{proc.description ? <div className="item-sub">{proc.description}</div> : null}</div><div className="row"><button className="btn ghost" type="button" onClick={() => editProcedure(proc)}>Editar</button><button className="btn danger" type="button" onClick={() => askRemoveItem("procedures", proc.id, "procedimento")}>Excluir</button></div></div></div>)}
             </div>
           </section>
         </div>}
 
         {tab === "insumos" && <div className="grid">
-          <section className="card">
+          <section className="card" ref={suppliesFormRef}>
             <div className="row space center"><h2 style={{marginTop:0}}>{supplyForm.id ? "Editar insumo" : "Cadastrar insumo"}</h2>{supplyForm.id ? <button className="btn ghost" type="button" onClick={resetSupplyForm}>Cancelar edição</button> : null}</div>
             <form onSubmit={saveSupply} className="grid">
               <div className="row"><div className="field"><label>Nome do insumo</label><input value={supplyForm.name} onChange={e => setSupplyForm(v => ({...v, name:e.target.value}))} placeholder="Ex.: Espátula descartável" /></div><div className="field small"><label>Valor pago</label><input type="number" step="0.01" value={supplyForm.purchase_price} onChange={e => setSupplyForm(v => ({...v, purchase_price:e.target.value}))} /></div><div className="field small"><label>Qtd. na embalagem</label><input type="number" step="0.01" value={supplyForm.quantity_in_package} onChange={e => setSupplyForm(v => ({...v, quantity_in_package:e.target.value}))} /></div><div className="field small"><label>Unidade</label><input value={supplyForm.unit_label} onChange={e => setSupplyForm(v => ({...v, unit_label:e.target.value}))} /></div></div>
               <div className="row"><div className="field small"><label>Estoque atual</label><input type="number" step="0.01" value={supplyForm.stock_quantity} onChange={e => setSupplyForm(v => ({...v, stock_quantity:e.target.value}))} /></div><div className="field small"><label>Avisar quando chegar em</label><input type="number" step="0.01" value={supplyForm.low_stock_threshold} onChange={e => setSupplyForm(v => ({...v, low_stock_threshold:e.target.value}))} /></div></div>
-              <div className="row"><button className="btn primary" disabled={busy}>{busy ? "Salvando..." : supplyForm.id ? "Atualizar insumo" : "Salvar insumo"}</button></div>
+              <div className="row"><button className="btn primary" type="submit" disabled={busy}>{busy ? "Salvando..." : supplyForm.id ? "Atualizar insumo" : "Salvar insumo"}</button></div>
             </form>
           </section>
 
           <section className="card">
             <h2 style={{marginTop:0}}>Estoque e custo por unidade</h2>
             <div className="table"><table><thead><tr><th>Insumo</th><th>Custo por unidade</th><th>Estoque</th><th>Alerta</th><th></th></tr></thead><tbody>
-              {!supplies.length ? <tr><td colSpan={5}><div className="empty">Nenhum insumo cadastrado.</div></td></tr> : supplies.map(s => <tr key={s.id}><td><div style={{fontWeight:700}}>{s.name}</div><div className="muted">Pago: {brl(s.purchase_price)} / {s.quantity_in_package} {s.unit_label}</div></td><td>{brl(s.cost_per_unit)}</td><td>{s.stock_quantity} {s.unit_label}</td><td>{s.low_stock_threshold} {s.unit_label}</td><td><div className="row"><button className="btn ghost" type="button" onClick={() => editSupply(s)}>Editar</button><button className="btn danger" type="button" onClick={() => removeItem("supplies", s.id, "insumo")}>Excluir</button></div></td></tr>)}
+              {!supplies.length ? <tr><td colSpan={5}><div className="empty">Nenhum insumo cadastrado.</div></td></tr> : supplies.map(s => <tr key={s.id}><td><div style={{fontWeight:700}}>{s.name}</div><div className="muted">Pago: {brl(s.purchase_price)} / {s.quantity_in_package} {s.unit_label}</div></td><td>{brl(s.cost_per_unit)}</td><td>{s.stock_quantity} {s.unit_label}</td><td>{s.low_stock_threshold} {s.unit_label}</td><td><div className="row"><button className="btn ghost" type="button" onClick={() => editSupply(s)}>Editar</button><button className="btn danger" type="button" onClick={() => askRemoveItem("supplies", s.id, "insumo")}>Excluir</button></div></td></tr>)}
             </tbody></table></div>
           </section>
         </div>}
@@ -812,7 +879,7 @@ export default function Page() {
             <form onSubmit={saveSettings} className="grid">
               <div className="row"><div className="field"><label>Nome do salão</label><input value={settingsForm.salon_name} onChange={e => setSettingsForm(v => ({...v, salon_name:e.target.value}))} /></div><div className="field small"><label>Dias para cliente sumida</label><input type="number" value={settingsForm.inactive_days_threshold} onChange={e => setSettingsForm(v => ({...v, inactive_days_threshold:Number(e.target.value || 30)}))} /></div></div>
               <div className="field"><label>Mensagem padrão do WhatsApp</label><textarea value={settingsForm.whatsapp_message_template} onChange={e => setSettingsForm(v => ({...v, whatsapp_message_template:e.target.value}))} /></div>
-              <div className="row"><button className="btn primary" disabled={busy}>{busy ? "Salvando..." : "Salvar configurações"}</button></div>
+              <div className="row"><button className="btn primary" type="submit" disabled={busy}>{busy ? "Salvando..." : "Salvar configurações"}</button></div>
             </form>
           </section>
 
