@@ -73,6 +73,11 @@ function inputDateTimeValue(v?: string | null) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+function localDateKey(v: string | Date) {
+  const d = new Date(v);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
 function emptyAppointmentForm(): AppointmentFormState {
   return {
     id: "",
@@ -227,12 +232,13 @@ export default function Page() {
     const labels = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
     return Array.from({length:7}, (_,i) => {
       const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() - (6-i));
-      const key = d.toISOString().slice(0,10);
-      const dayApps = appointments.filter(a => new Date(a.attended_at).toISOString().slice(0,10) === key);
+      const key = localDateKey(d);
+      const dayApps = appointments.filter(a => localDateKey(a.attended_at) === key);
       return { day: labels[d.getDay()], gross: dayApps.reduce((s,a)=>s+Number(a.gross_amount||0),0), net: dayApps.reduce((s,a)=>s+Number(a.net_amount||0),0) };
     });
   }, [appointments]);
   const chartMax = Math.max(1, ...chartRows.flatMap(r => [r.gross, r.net]));
+  const hasChartData = chartRows.some(r => r.gross > 0 || r.net > 0);
 
   const upcomingBookings = useMemo(() => {
     const now = Date.now();
@@ -552,8 +558,20 @@ export default function Page() {
       }
       const { error } = await supabase.from("appointments").delete().eq("id", id);
       if (error) throw error;
+
+      setAppointments(prev => prev.filter(item => item.id !== id));
+      setAppointmentProcedures(prev => prev.filter(item => item.appointment_id !== id));
+      setAppointmentSupplies(prev => prev.filter(item => item.appointment_id !== id));
+      setSupplies(prev => prev.map(item => {
+        const restored = usage
+          .filter(row => row.supply_id === item.id)
+          .reduce((sum, row) => sum + Number(row.quantity_used || 0), 0);
+        return restored ? { ...item, stock_quantity: Number(item.stock_quantity || 0) + restored } : item;
+      }));
+
       if (appointmentForm.id === id) resetAppointmentForm();
-      setOk("Atendimento excluído.");
+      setPendingDelete(null);
+      setOk("Atendimento excluído e faturamento atualizado.");
       await loadAll();
     } catch (e:any) { setError(e?.message || "Erro ao excluir atendimento."); } finally { setBusy(false); }
   }
@@ -586,7 +604,9 @@ export default function Page() {
       const supabase = getSupabase();
       const { error } = await supabase.from("bookings").delete().eq("id", id);
       if (error) throw error;
+      setBookings(prev => prev.filter(item => item.id !== id));
       if (bookingForm.id === id) resetBookingForm();
+      setPendingDelete(null);
       setOk("Agendamento excluído.");
       await loadAll();
     } catch (e:any) { setError(e?.message || "Erro ao excluir agendamento."); } finally { setBusy(false); }
@@ -614,7 +634,18 @@ export default function Page() {
       if (table === "procedures" && procedureForm.id === id) resetProcedureForm();
       setOk(`${label} excluído.`);
       await loadAll();
-    } catch (e:any) { setError(e?.message || `Erro ao excluir ${label}.`); } finally { setBusy(false); }
+    } catch (e:any) {
+      const raw = String(e?.message || "").toLowerCase();
+      if (table === "clients" && (raw.includes("appointments_client_id_fkey") || raw.includes("violates foreign key constraint"))) {
+        setError("Não é possível excluir esta cliente porque existe um atendimento ou agendamento vinculado a ela. Caso queira excluir, primeiro exclua o agendamento e, se houver atendimento já registrado, mantenha a cliente ou remova o atendimento relacionado primeiro.");
+      } else if (table === "procedures" && raw.includes("violates foreign key constraint")) {
+        setError("Não é possível excluir este procedimento porque ele já está vinculado a um atendimento ou configuração do sistema.");
+      } else if (table === "supplies" && raw.includes("violates foreign key constraint")) {
+        setError("Não é possível excluir este insumo porque ele já está vinculado a um procedimento ou atendimento.");
+      } else {
+        setError(e?.message || `Erro ao excluir ${label}.`);
+      }
+    } finally { setBusy(false); }
   }
 
   async function confirmDelete() {
@@ -708,7 +739,11 @@ export default function Page() {
             <div className="card">
               <div className="row space center"><h2 style={{marginTop:0}}>Últimos 7 dias</h2><span className="badge">Bruto x Líquido</span></div>
               <div className="chart">
-                {chartRows.map(row => <div key={row.day} className="col"><div className="bars"><div className="bar gross" style={{height: `${(row.gross/chartMax)*100}%`}} /><div className="bar net" style={{height: `${(row.net/chartMax)*100}%`}} /></div><div className="chart-label">{row.day}</div></div>)}
+                {!hasChartData ? <div className="empty" style={{width:"100%"}}>Ainda não há faturamento nos últimos 7 dias.</div> : chartRows.map(row => {
+                  const grossHeight = row.gross > 0 ? Math.max(10, (row.gross / chartMax) * 100) : 0;
+                  const netHeight = row.net > 0 ? Math.max(10, (row.net / chartMax) * 100) : 0;
+                  return <div key={row.day} className="col"><div className="bars"><div className="bar gross" style={{height: `${grossHeight}%`}} /><div className="bar net" style={{height: `${netHeight}%`}} /></div><div className="chart-label">{row.day}</div></div>;
+                })}
               </div>
             </div>
 
